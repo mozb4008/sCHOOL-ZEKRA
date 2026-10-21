@@ -79,6 +79,39 @@ test('configuration diagnostics expose missing names, never credentials', async 
   assert.ok(!missing.body.includes('test-anon'));
   assert.ok(!missing.body.includes('test-service'));
 });
+test('modern publishable and secret API keys are never sent as Bearer JWTs', async () => {
+  process.env.SUPABASE_ANON_KEY = 'sb_publishable_test';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'sb_secret_test';
+  upstream = () => ({});
+  const result = await handler(event({ action: 'check-connection' }, { cookie: '' }));
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(parse(result), { auth: true, database: true });
+  assert.equal(calls[0].headers.apikey, 'sb_publishable_test');
+  assert.equal(calls[1].headers.apikey, 'sb_secret_test');
+  assert.ok(calls.every(c => !('Authorization' in c.headers)));
+  assert.ok(!result.body.includes('sb_'));
+});
+test('user sessions still send their JWT with a modern publishable key', async () => {
+  process.env.SUPABASE_ANON_KEY = 'sb_publishable_test';
+  const result = await handler(event({ action: 'me' }));
+  assert.equal(result.statusCode, 200);
+  assert.equal(calls[0].headers.Authorization, 'Bearer token');
+});
+test('invalid API configuration is distinguished from an incorrect password', async () => {
+  upstream = () => new Response(JSON.stringify({ message: 'Invalid API key' }), { status: 401 });
+  const config = await handler(event({ action: 'login', username: 's001', password: 'password' }));
+  assert.equal(config.statusCode, 503); assert.match(parse(config).error, /SUPABASE_ANON_KEY/);
+  upstream = () => new Response(JSON.stringify({ error_code: 'invalid_credentials' }), { status: 400 });
+  const credentials = await handler(event({ action: 'login', username: 's001', password: 'password' }));
+  assert.equal(credentials.statusCode, 401); assert.ok(!parse(credentials).error.includes('SUPABASE_ANON_KEY'));
+});
+test('confirmation errors and invalid server credentials have distinct messages', async () => {
+  upstream = () => new Response(JSON.stringify({ error_code: 'email_not_confirmed' }), { status: 400 });
+  assert.match(parse(await handler(event({ action: 'login', username: 's001', password: 'password' }))).error, /غير مؤكد/);
+  upstream = path => path === '/auth/v1/user' ? { id: studentId } : new Response('{}', { status: 401 });
+  const res = await handler(event({ action: 'me' }));
+  assert.equal(res.statusCode, 503); assert.match(parse(res).error, /SUPABASE_SERVICE_ROLE_KEY/);
+});
 test('anonymous user cannot read records', async () => {
   const res = await handler(event({ action: 'me' }, { cookie: '' }));
   assert.equal(res.statusCode, 401); assert.equal(calls.length, 0);

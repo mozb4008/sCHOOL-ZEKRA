@@ -41,12 +41,23 @@ export async function handler(event) {
     if (action === 'status') return reply(200, { configured, missing });
     if (!configured) throw new ApiError(503, 'المنصة بانتظار تفعيل قاعدة البيانات من مسؤول المنصة.');
     const request = async (path, { method = 'GET', data, token = service, admin = true, prefer } = {}) => {
+      // New sb_publishable_/sb_secret_ keys belong only in apikey; they are not JWTs.
+      const authorization = /^sb_(publishable|secret)_/.test(token) ? {} : { Authorization: `Bearer ${token}` };
       const res = await fetch(`${url}${path}`, { method, signal: AbortSignal.timeout(12000), headers: {
-        apikey: admin ? service : anon, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+        apikey: admin ? service : anon, ...authorization, 'Content-Type': 'application/json',
         ...(prefer ? { Prefer: prefer } : {}) }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
       const result = await res.json().catch(() => null);
       if (!res.ok) {
         if (res.status === 429) throw new ApiError(429, 'محاولات كثيرة. انتظري قليلًا ثم أعيدي المحاولة.');
+        const code = result?.error_code || result?.code;
+        if (code === 'email_not_confirmed') throw new ApiError(400, 'بريد الحساب غير مؤكد. أكّدي الحساب من Authentication ثم Users داخل Supabase.');
+        if (code === 'invalid_credentials') throw new ApiError(401, 'البريد أو كلمة المرور غير صحيحة. استخدمي حساب المعلمة المنشأ في Authentication ثم Users، وليس كلمة مرور لوحة Supabase.');
+        const invalidKey = /invalid.?api.?key|no api.?key|invalid.?jwt|invalid authentication credentials/i.test(result?.message || result?.msg || '');
+        if ((admin && [401, 403].includes(res.status)) ||
+            (invalidKey && (admin || path.includes('/token') || /api.?key/i.test(result?.message || result?.msg || '')))) {
+          throw new ApiError(503, `إعداد الربط غير صحيح: تحققي من ${admin ? 'SUPABASE_SERVICE_ROLE_KEY' : 'SUPABASE_ANON_KEY'} وأنه من نفس مشروع SUPABASE_URL، ثم أعيدي النشر.`);
+        }
+        if (['PGRST205', '42P01', '42501'].includes(code)) throw new ApiError(503, 'جداول المنصة أو صلاحياتها غير جاهزة في مشروع Supabase المرتبط. شغّلي ملف schema.sql في المشروع نفسه.');
         if (res.status === 401 || res.status === 403) throw new ApiError(401, 'انتهت الجلسة أو بيانات الدخول غير صحيحة.');
         if (result?.code === '23505' || result?.code === 'email_exists') throw new ApiError(409, 'السجل موجود مسبقًا.');
         if (path.includes('/token')) throw new ApiError(401, 'اسم المستخدم أو كلمة المرور غير صحيحة.');
@@ -55,6 +66,12 @@ export async function handler(event) {
       }
       return result;
     };
+    // Public health check returns connectivity only, never profile data or key values.
+    if (action === 'check-connection') {
+      await request('/auth/v1/settings', { admin: false, token: anon });
+      await request('/rest/v1/profiles?select=id&limit=1');
+      return reply(200, { auth: true, database: true });
+    }
     const allRows = async (table, filter = '') => {
       const rows = [];
       for (let offset = 0; ; offset += 500) {
