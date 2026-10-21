@@ -3,7 +3,7 @@ import { usePlatform, api, Notice, fieldClass, buttonClass, downloadJson } from 
 import { errorChallengeBank } from '../data/errorChallengeData';
 
 export function LoginPanel() {
-  const { login, configured, loading, error: connectionError, retry } = usePlatform();
+  const { login, configured, missing, loading, error: connectionError, retry } = usePlatform();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,7 +22,7 @@ export function LoginPanel() {
   return <section className="max-w-lg mx-auto my-10 px-4 space-y-5">
     <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-5">
       <div><p className="text-moe-green font-bold text-sm">أهلًا بكِ في أتقن مهارتي</p><h1 className="text-2xl font-black text-moe-navy mt-2">دخول الطالبات والمعلمة</h1><p className="text-sm text-slate-600 mt-3 leading-7">ادخلي بالرمز وكلمة المرور اللذين زودتكِ بهما المعلمة، لتُحفظ نتائجكِ ويظهر لكِ مستواكِ من أي جهاز.</p></div>
-      {loading ? <Notice>جارٍ الاتصال بالمنصة…</Notice> : connectionError ? <Notice error>{connectionError} <button className="underline" onClick={retry}>إعادة المحاولة</button></Notice> : !configured ? <Notice>المنصة بانتظار تفعيل قاعدة البيانات. يمكنكِ تصفح الشرح، وسيُتاح الدخول بعد إكمال الإعداد.</Notice> : null}
+      {loading ? <Notice>جارٍ الاتصال بالمنصة…</Notice> : connectionError ? <Notice error>{connectionError} <button className="underline" onClick={retry}>إعادة المحاولة</button></Notice> : !configured ? <Notice>المنصة بانتظار تفعيل قاعدة البيانات. يمكنكِ تصفح الشرح، وسيُتاح الدخول بعد إكمال الإعداد.{missing.length > 0 && <details className="mt-3"><summary className="cursor-pointer font-bold">تفاصيل الإعداد لمسؤول المنصة</summary><p>المتغيرات التالية مفقودة أو فارغة في خدمة الموقع المنشورة. أضفها في مشروع Netlify نفسه ثم أعد النشر:</p><ul className="list-disc pr-5">{missing.map(name => <li key={name}><code dir="ltr">{name}</code></li>)}</ul></details>}<button className="block underline mt-2" onClick={retry}>إعادة التحقق</button></Notice> : null}
       <form onSubmit={submit} className="space-y-4">
         <label className="block text-sm font-bold">اسم المستخدم أو بريد المعلمة<input autoComplete="username" dir="ltr" className={`${fieldClass} mt-2`} value={username} onChange={e => setUsername(e.target.value)} required maxLength={160} placeholder="s001" /></label>
         <label className="block text-sm font-bold">كلمة المرور<input type="password" autoComplete="current-password" dir="ltr" className={`${fieldClass} mt-2`} value={password} onChange={e => setPassword(e.target.value)} required maxLength={128} /></label>

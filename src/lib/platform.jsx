@@ -31,12 +31,14 @@ export function PlatformProvider({ children }) {
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [configured, setConfigured] = useState(false);
+  const [missing, setMissing] = useState([]);
   const [error, setError] = useState('');
   const initialize = async () => {
     setLoading(true); setError('');
     try {
       const status = await api('status');
       setConfigured(status.configured);
+      setMissing(status.missing || []);
       if (status.configured) {
         try { setAccount(await api('me')); } catch (e) { if (e.status !== 401) throw e; }
       }
@@ -61,7 +63,7 @@ export function PlatformProvider({ children }) {
   const login = async (username, password) => { await api('login', { username, password }); setAccount(await api('me')); channel.current?.postMessage('login'); };
   const logout = async () => { await api('logout'); setAccount(null); channel.current?.postMessage('logout'); };
   const refresh = async () => { const result = await api('me'); setAccount(result); return result; };
-  return <PlatformContext.Provider value={{ account, setAccount, loading, configured, error, retry: initialize, login, logout, refresh }}>{children}</PlatformContext.Provider>;
+  return <PlatformContext.Provider value={{ account, setAccount, loading, configured, missing, error, retry: initialize, login, logout, refresh }}>{children}</PlatformContext.Provider>;
 }
 
 export function Notice({ children, error = false }) {

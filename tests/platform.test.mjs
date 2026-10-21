@@ -66,8 +66,18 @@ test('public questions do not reveal keys or explanations', () => {
 test('missing configuration is explicit and blocks login', async () => {
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   assert.equal(parse(await handler(event({ action: 'status' }))).configured, false);
+  assert.deepEqual(parse(await handler(event({ action: 'status' }))).missing, ['SUPABASE_SERVICE_ROLE_KEY']);
   assert.equal((await handler(event({ action: 'login' }))).statusCode, 503);
   assert.equal(calls.length, 0);
+});
+test('configuration diagnostics expose missing names, never credentials', async () => {
+  const ready = parse(await handler(event({ action: 'status' })));
+  assert.deepEqual(ready, { configured: true, missing: [] });
+  process.env.SUPABASE_URL = '  ';
+  const missing = await handler(event({ action: 'status' }));
+  assert.deepEqual(parse(missing).missing, ['SUPABASE_URL']);
+  assert.ok(!missing.body.includes('test-anon'));
+  assert.ok(!missing.body.includes('test-service'));
 });
 test('anonymous user cannot read records', async () => {
   const res = await handler(event({ action: 'me' }, { cookie: '' }));

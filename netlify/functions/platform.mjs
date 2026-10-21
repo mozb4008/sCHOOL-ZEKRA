@@ -31,11 +31,14 @@ export async function handler(event) {
     try { body = JSON.parse(event.body || '{}'); } catch { throw new ApiError(400, 'الطلب غير صالح.'); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError(400, 'الطلب غير صالح.');
     const { action } = body;
-    const url = process.env.SUPABASE_URL?.replace(/\/$/, '');
-    const anon = process.env.SUPABASE_ANON_KEY;
-    const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const url = process.env.SUPABASE_URL?.trim().replace(/\/$/, '');
+    const anon = process.env.SUPABASE_ANON_KEY?.trim();
+    const service = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     const configured = !!(url && anon && service);
-    if (action === 'status') return reply(200, { configured });
+    const missing = [['SUPABASE_URL', url], ['SUPABASE_ANON_KEY', anon], ['SUPABASE_SERVICE_ROLE_KEY', service]]
+      .filter(([, value]) => !value).map(([name]) => name);
+    // Expose variable names only; credentials never leave the server.
+    if (action === 'status') return reply(200, { configured, missing });
     if (!configured) throw new ApiError(503, 'المنصة بانتظار تفعيل قاعدة البيانات من مسؤول المنصة.');
     const request = async (path, { method = 'GET', data, token = service, admin = true, prefer } = {}) => {
       const res = await fetch(`${url}${path}`, { method, signal: AbortSignal.timeout(12000), headers: {
