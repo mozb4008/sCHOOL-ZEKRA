@@ -50,6 +50,10 @@ export async function handler(event) {
       if (!res.ok) {
         if (res.status === 429) throw new ApiError(429, 'محاولات كثيرة. انتظري قليلًا ثم أعيدي المحاولة.');
         const code = result?.error_code || result?.code;
+        if (code === 'signup_disabled') throw new ApiError(503, 'التسجيل الذاتي لم يُفعّل بعد. فعّلي Allow new users to sign up من إعدادات Authentication في Supabase.');
+        if (code === 'email_address_not_authorized' || /email address.*not authorized|only.*team.*email/i.test(result?.msg || result?.message || '')) throw new ApiError(503, 'إرسال البريد للطالبات يحتاج إعداد Custom SMTP في Supabase. الإرسال الافتراضي مخصص لعناوين فريق المشروع.');
+        if (['unexpected_failure', 'email_send_failed'].includes(code) && /email|smtp/i.test(result?.msg || result?.message || '')) throw new ApiError(503, 'تعذّر إرسال البريد. راجعي إعدادات Custom SMTP في Supabase.');
+        if (code === 'same_password') throw new ApiError(400, 'اختاري كلمة مرور تختلف عن كلمة المرور السابقة.');
         if (code === 'email_not_confirmed') throw new ApiError(400, 'بريد الحساب غير مؤكد. أكّدي الحساب من Authentication ثم Users داخل Supabase.');
         if (code === 'invalid_credentials') throw new ApiError(401, 'البريد أو كلمة المرور غير صحيحة. استخدمي حساب المعلمة المنشأ في Authentication ثم Users، وليس كلمة مرور لوحة Supabase.');
         const invalidKey = /invalid.?api.?key|no api.?key|invalid.?jwt|invalid authentication credentials/i.test(result?.message || result?.msg || '');
@@ -83,12 +87,41 @@ export async function handler(event) {
     const cookies = Object.fromEntries((headers.cookie || '').split(';').filter(v => v.includes('=')).map(v => {
       const i = v.indexOf('='); return [v.slice(0, i).trim(), decodeURIComponent(v.slice(i + 1))];
     }));
+    const callbackUrl = `${secure ? 'https' : 'http'}://${headers.host}/?auth=callback`;
+    if (['signup', 'recover-password', 'resend-confirmation'].includes(action)) {
+      const email = String(body.email || '').trim().toLowerCase();
+      if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('.invalid')) throw new ApiError(400, 'أدخلي بريدكِ الإلكتروني الحقيقي بشكل صحيح.');
+      const redirect = `redirect_to=${encodeURIComponent(callbackUrl)}`;
+      if (action === 'signup') {
+        const name = String(body.name || '').trim();
+        if (name.length < 2 || name.length > 120) throw new ApiError(400, 'أدخلي اسم الطالبة من حرفين إلى 120 حرفًا.');
+        if (typeof body.password !== 'string' || body.password.length < 10 || body.password.length > 128) throw new ApiError(400, 'استخدمي كلمة مرور من 10 أحرف على الأقل.');
+        const settings = await request('/auth/v1/settings', { admin: false, token: anon });
+        if (settings.mailer_autoconfirm === true) throw new ApiError(503, 'يجب تفعيل Confirm email في إعدادات Email داخل Supabase قبل فتح التسجيل للطالبات.');
+        // Never accept a role, code, user id or confirmation flag from public signup.
+        await request(`/auth/v1/signup?${redirect}`, { method: 'POST', admin: false, token: anon, data: { email, password: body.password, data: { name } } });
+      } else if (action === 'recover-password') {
+        await request(`/auth/v1/recover?${redirect}`, { method: 'POST', admin: false, token: anon, data: { email } });
+      } else {
+        await request(`/auth/v1/resend?${redirect}`, { method: 'POST', admin: false, token: anon, data: { type: 'signup', email } });
+      }
+      return reply(200, { ok: true });
+    }
+    if (action === 'email-session') {
+      if (typeof body.accessToken !== 'string' || typeof body.refreshToken !== 'string' || !['signup', 'recovery', 'email'].includes(body.type)) throw new ApiError(400, 'رابط البريد غير صالح. اطلبي رابطًا جديدًا.');
+      const confirmed = await request('/auth/v1/user', { token: body.accessToken, admin: false });
+      if (!confirmed.email_confirmed_at) throw new ApiError(403, 'أكّدي بريدكِ الإلكتروني أولًا.');
+      const session = await request('/auth/v1/token?grant_type=refresh_token', { method: 'POST', admin: false, token: anon, data: { refresh_token: body.refreshToken } });
+      const refreshed = await request('/auth/v1/user', { token: session.access_token, admin: false });
+      if (confirmed.id !== refreshed.id) throw new ApiError(403, 'رابط الجلسة غير صالح. اطلبي رابطًا جديدًا.');
+      return reply(200, { ok: true }, [...sessionCookies(session), cookie('atqin_recovery', body.type === 'recovery' ? '1' : '', body.type === 'recovery' ? 3600 : 0)]);
+    }
     if (action === 'login') {
       const username = String(body.username || '').trim().toLowerCase();
       if ((!codePattern.test(username) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) || typeof body.password !== 'string' || body.password.length > 128) throw new ApiError(400, 'أدخلي اسم المستخدم وكلمة المرور.');
       const data = await request('/auth/v1/token?grant_type=password', { method: 'POST', admin: false, token: anon,
         data: { email: username.includes('@') ? username : loginEmail(username), password: body.password } });
-      return reply(200, { ok: true }, sessionCookies(data));
+      return reply(200, { ok: true }, [...sessionCookies(data), cookie('atqin_recovery', '', 0)]);
     }
     if (action === 'refresh') {
       if (!cookies.atqin_refresh) return reply(401, { error: 'سجّلي الدخول مجددًا.' }, clearCookies());
@@ -98,27 +131,34 @@ export async function handler(event) {
     }
     if (action === 'logout') {
       if (cookies.atqin_access) await request('/auth/v1/logout', { method: 'POST', token: cookies.atqin_access, admin: false }).catch(() => {});
-      return reply(200, { ok: true }, clearCookies());
+      return reply(200, { ok: true }, [...clearCookies(), cookie('atqin_recovery', '', 0)]);
     }
     if (!cookies.atqin_access) throw new ApiError(401, 'سجّلي الدخول أولًا.');
     const user = await request('/auth/v1/user', { token: cookies.atqin_access, admin: false });
-    const [profile] = await request(`/rest/v1/profiles?id=eq.${user.id}&select=*`);
+    let [profile] = await request(`/rest/v1/profiles?id=eq.${user.id}&select=*`);
+    if (!profile && user.email && user.email_confirmed_at && !user.email.endsWith('@students.atqin.invalid')) {
+      const name = String(user.user_metadata?.name || user.email.split('@')[0]).trim().slice(0, 120);
+      await request('/rest/v1/profiles?on_conflict=id', { method: 'POST', prefer: 'resolution=ignore-duplicates',
+        data: { id: user.id, name: name.length >= 2 ? name : 'طالبة جديدة', code: `s-${user.id.replaceAll('-', '')}`, role: 'student', must_change_password: false } });
+      [profile] = await request(`/rest/v1/profiles?id=eq.${user.id}&select=*`);
+    }
     if (!profile) throw new ApiError(403, 'الحساب غير مفعّل. تواصلي مع المعلمة.');
     const ownData = async () => {
       const [attempts, challenges] = await Promise.all([
         allRows('assessment_attempts', `student_id=eq.${user.id}`),
         allRows('challenge_attempts', `student_id=eq.${user.id}`)
       ]);
-      return { profile, attempts, history: assessmentHistory(attempts), completedIds: [...new Set(challenges.filter(c => c.correct).map(c => c.challenge_id))] };
+      return { profile, recoveryRequired: cookies.atqin_recovery === '1', attempts, history: assessmentHistory(attempts), completedIds: [...new Set(challenges.filter(c => c.correct).map(c => c.challenge_id))] };
     };
     if (action === 'me') return reply(200, await ownData());
     if (action === 'change-password') {
       if (typeof body.password !== 'string' || body.password.length < 10 || body.password.length > 128) throw new ApiError(400, 'استخدمي كلمة مرور من 10 أحرف على الأقل.');
       await request('/auth/v1/user', { method: 'PUT', token: cookies.atqin_access, admin: false, data: { password: body.password } });
       await request(`/rest/v1/profiles?id=eq.${user.id}`, { method: 'PATCH', data: { must_change_password: false } });
-      return reply(200, { ok: true });
+      return reply(200, { ok: true }, [cookie('atqin_recovery', '', 0)]);
     }
     if (profile.must_change_password) throw new ApiError(403, 'غيّري كلمة المرور المؤقتة أولًا.');
+    if (cookies.atqin_recovery === '1') throw new ApiError(403, 'اختاري كلمة مرور جديدة لإكمال استعادة الحساب أولًا.');
     if (action === 'questions') return reply(200, publicQuestions());
     if (action === 'submit-assessment' || action === 'challenge') {
       if (profile.role !== 'student') throw new ApiError(403, 'التسجيل مخصص لحسابات الطالبات.');

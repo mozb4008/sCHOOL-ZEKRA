@@ -1,6 +1,19 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { parseEmailCallback } from './emailCallback';
 
 let refreshing;
+let callbackPromise;
+let callbackDetected = false;
+function consumeEmailCallback() {
+  if (callbackPromise) return callbackPromise;
+  const callback = parseEmailCallback(window.location.hash, window.location.search);
+  if (callback.kind === 'none') return Promise.resolve(false);
+  callbackDetected = true;
+  const address = new URL(window.location.href); address.hash = ''; address.searchParams.delete('auth');
+  window.history.replaceState(null, '', address.pathname + address.search);
+  callbackPromise = callback.kind === 'error' ? Promise.reject(new Error(callback.message)) : api('email-session', callback).then(() => true);
+  return callbackPromise;
+}
 async function call(action, data = {}) {
   const res = await fetch('/.netlify/functions/platform', { method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...data, action }) });
@@ -10,7 +23,8 @@ async function call(action, data = {}) {
 export async function api(action, data = {}) {
   let response;
   try { response = await call(action, data); } catch { throw new Error('تعذّر الاتصال. تحققي من الإنترنت وحاولي مجددًا.'); }
-  if (response.res.status === 401 && !['login', 'refresh', 'logout', 'status'].includes(action)) {
+  const publicAction = ['login', 'refresh', 'logout', 'status', 'signup', 'recover-password', 'resend-confirmation', 'email-session'].includes(action);
+  if (response.res.status === 401 && !publicAction) {
     refreshing ||= call('refresh').finally(() => { refreshing = null; });
     const renewed = await refreshing;
     if (renewed.res.ok) response = await call(action, data);
@@ -18,7 +32,7 @@ export async function api(action, data = {}) {
   if (!response.res.ok) {
     const error = new Error(response.result.error || 'تعذّر إكمال العملية.');
     error.status = response.res.status;
-    if (error.status === 401 && action !== 'login') window.dispatchEvent(new Event('atqin-session-expired'));
+    if (error.status === 401 && !publicAction) window.dispatchEvent(new Event('atqin-session-expired'));
     throw error;
   }
   return response.result;
@@ -32,6 +46,7 @@ export function PlatformProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [configured, setConfigured] = useState(false);
   const [missing, setMissing] = useState([]);
+  const [authCallback, setAuthCallback] = useState(false);
   const [error, setError] = useState('');
   const initialize = async () => {
     setLoading(true); setError('');
@@ -40,6 +55,7 @@ export function PlatformProvider({ children }) {
       setConfigured(status.configured);
       setMissing(status.missing || []);
       if (status.configured) {
+        try { await consumeEmailCallback(); } finally { if (callbackDetected) setAuthCallback(true); }
         try { setAccount(await api('me')); } catch (e) { if (e.status !== 401) throw e; }
       }
     } catch (e) { setError(e.message); }
@@ -63,7 +79,7 @@ export function PlatformProvider({ children }) {
   const login = async (username, password) => { await api('login', { username, password }); setAccount(await api('me')); channel.current?.postMessage('login'); };
   const logout = async () => { await api('logout'); setAccount(null); channel.current?.postMessage('logout'); };
   const refresh = async () => { const result = await api('me'); setAccount(result); return result; };
-  return <PlatformContext.Provider value={{ account, setAccount, loading, configured, missing, error, retry: initialize, login, logout, refresh }}>{children}</PlatformContext.Provider>;
+  return <PlatformContext.Provider value={{ account, setAccount, loading, configured, missing, authCallback, error, retry: initialize, login, logout, refresh }}>{children}</PlatformContext.Provider>;
 }
 
 export function Notice({ children, error = false }) {

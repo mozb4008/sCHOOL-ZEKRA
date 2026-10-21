@@ -21,13 +21,13 @@ export default function App() {
     setTab(tab);
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
-  const { account, logout } = usePlatform();
+  const { account, logout, authCallback } = usePlatform();
   const [logoutError, setLogoutError] = useState('');
   const [loggingOut, setLoggingOut] = useState(false);
   const isTeacher = account?.profile.role === 'teacher';
   useEffect(() => {
-    setTab(account ? (account.profile.role === 'teacher' ? 'teacher' : 'progress') : 'home');
-  }, [account?.profile.id]);
+    setTab(account ? (account.profile.role === 'teacher' ? 'teacher' : 'progress') : authCallback ? 'login' : 'home');
+  }, [account?.profile.id, authCallback]);
   const signOut = async () => {
     setLoggingOut(true); setLogoutError('');
     try { await logout(); } catch (e) { setLogoutError(e.message); } finally { setLoggingOut(false); }
@@ -48,7 +48,7 @@ export default function App() {
       {/* Main Dynamic View Content */}
       <main className="flex-1" id="main-content">
         {account && <div className="no-print max-w-7xl mx-auto px-4 pt-4 flex flex-wrap justify-between gap-3 items-center text-sm"><span>{account.profile.name} • {isTeacher ? 'حساب المعلمة' : 'حساب الطالبة'}</span><button className={buttonClass} disabled={loggingOut} onClick={signOut}>{loggingOut ? 'جارٍ الخروج…' : 'تسجيل الخروج'}</button>{logoutError && <Notice error>{logoutError}</Notice>}</div>}
-        {account?.profile.must_change_password ? <PasswordPanel required /> : privateTab && !account ? <LoginPanel /> : ['teacher', 'report'].includes(activeTab) && !isTeacher ? <div className="max-w-3xl mx-auto p-6"><Notice error>هذه الصفحة متاحة للمعلمة فقط.</Notice></div> : <>
+        {account?.profile.must_change_password || account?.recoveryRequired ? <PasswordPanel required recovery={account.recoveryRequired} /> : privateTab && !account ? <LoginPanel /> : ['teacher', 'report'].includes(activeTab) && !isTeacher ? <div className="max-w-3xl mx-auto p-6"><Notice error>هذه الصفحة متاحة للمعلمة فقط.</Notice></div> : <>
         {activeTab === 'login' && (isTeacher ? <TeacherDashboard onGoToReport={() => setActiveTab('report')} /> : <StudentProgress onNavigate={setActiveTab} />)}
         {activeTab === 'progress' && account?.profile.role === 'student' && <StudentProgress onNavigate={setActiveTab} />}
         {activeTab === 'home' && (

@@ -5,6 +5,7 @@ import { gradeAssessment, gradeChallenge, assessmentHistory, publicQuestions } f
 import { preTestQuestions, postTestQuestions } from '../src/data/prePostTestData.js';
 import { errorChallengeBank } from '../src/data/errorChallengeData.js';
 import { buildReport, formatPercent, studentsCsv } from '../src/lib/report.js';
+import { parseEmailCallback } from '../src/lib/emailCallback.js';
 
 const originalFetch = globalThis.fetch;
 const studentId = '11111111-1111-4111-8111-111111111111';
@@ -225,4 +226,85 @@ test('teacher creates student role only and cleans orphan auth user if profile s
   const write = calls.find(c => c.path === '/rest/v1/profiles');
   assert.equal(write.data.role, 'student');
   assert.ok(calls.some(c => c.method === 'DELETE' && c.path.endsWith(otherId)));
+});
+test('public signup uses confirmation flow and cannot supply roles or confirm itself', async () => {
+  upstream = path => path === '/auth/v1/settings' ? { mailer_autoconfirm: false } : { id: studentId };
+  const res = await handler(event({ action: 'signup', name: 'طالبة جديدة', email: 'STUDENT@example.com', password: 'New-password-123', role: 'teacher', email_confirm: true }));
+  assert.equal(res.statusCode, 200);
+  const signup = calls.find(c => c.path.startsWith('/auth/v1/signup?'));
+  assert.deepEqual(signup.data, { email: 'student@example.com', password: 'New-password-123', data: { name: 'طالبة جديدة' } });
+  assert.ok(signup.path.includes(encodeURIComponent('https://school.netlify.app/?auth=callback')));
+  assert.ok(!res.multiValueHeaders); assert.ok(!calls.some(c => c.path.includes('/admin/')));
+});
+test('public registration requires real email, name and long password', async () => {
+  for (const data of [
+    { name: 'طالبة', email: 's001@students.atqin.invalid', password: 'password-123' },
+    { name: '', email: 'real@example.com', password: 'password-123' },
+    { name: 'طالبة', email: 'real@example.com', password: 'short' }
+  ]) assert.equal((await handler(event({ action: 'signup', ...data }))).statusCode, 400);
+  assert.equal(calls.length, 0);
+});
+test('signup refuses disabled email confirmation and reports SMTP setup errors clearly', async () => {
+  upstream = () => ({ mailer_autoconfirm: true });
+  const signup = { action: 'signup', name: 'طالبة', email: 'real@example.com', password: 'password-123' };
+  assert.equal((await handler(event(signup))).statusCode, 503);
+  assert.equal(calls.length, 1);
+  upstream = () => new Response(JSON.stringify({ error_code: 'email_address_not_authorized' }), { status: 403 });
+  const res = await handler(event({ action: 'recover-password', email: 'real@example.com' }));
+  assert.equal(res.statusCode, 503); assert.match(parse(res).error, /SMTP/);
+});
+test('recovery and resend requests contain no role or user enumeration in responses', async () => {
+  upstream = () => ({});
+  for (const action of ['recover-password', 'resend-confirmation']) {
+    const res = await handler(event({ action, email: 'real@example.com' }, { cookie: '' }));
+    assert.deepEqual(parse(res), { ok: true });
+  }
+  assert.equal(calls[0].data.email, 'real@example.com');
+  assert.equal(calls[1].data.type, 'signup');
+});
+test('confirmed users receive a student profile automatically, ignoring metadata role', async () => {
+  let created;
+  upstream = (path, options) => {
+    if (path === '/auth/v1/user') return { id: studentId, email: 'real@example.com', email_confirmed_at: '2026-10-21', user_metadata: { name: 'طالبة مسجلة', role: 'teacher' } };
+    if (path.startsWith('/rest/v1/profiles?on_conflict=')) { created = JSON.parse(options.body); return null; }
+    if (path.startsWith('/rest/v1/profiles?')) return created ? [created] : [];
+    return [];
+  };
+  const res = await handler(event({ action: 'me', role: 'teacher' }));
+  assert.equal(res.statusCode, 200); assert.equal(parse(res).profile.role, 'student');
+  assert.equal(created.role, 'student'); assert.equal(created.must_change_password, false);
+  assert.match(created.code, /^s-[0-9a-f]{32}$/);
+});
+test('unconfirmed users cannot create a profile by claiming a name or role', async () => {
+  upstream = path => path === '/auth/v1/user' ? { id: studentId, email: 'real@example.com', user_metadata: { name: 'طالبة', role: 'teacher' } } : [];
+  assert.equal((await handler(event({ action: 'me' }))).statusCode, 403);
+  assert.ok(!calls.some(c => c.method === 'POST'));
+});
+test('existing teacher profiles are never replaced by public student provisioning', async () => {
+  const normal = upstream;
+  upstream = path => path.startsWith('/rest/v1/profiles?') ? [{ ...profile, role: 'teacher' }] : normal(path);
+  assert.equal(parse(await handler(event({ action: 'me' }))).profile.role, 'teacher');
+  assert.ok(!calls.some(c => c.method === 'POST'));
+});
+test('email recovery validates matching token owners and sets secure session cookies', async () => {
+  upstream = path => path.includes('/token?') ? { access_token: 'refreshed', refresh_token: 'new-refresh' } : { id: studentId, email_confirmed_at: '2026-10-21' };
+  const res = await handler(event({ action: 'email-session', accessToken: 'confirmed', refreshToken: 'refresh', type: 'recovery' }));
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.includes('refreshed'));
+  assert.ok(res.multiValueHeaders['Set-Cookie'].some(c => c.startsWith('atqin_recovery=1;') && c.includes('HttpOnly')));
+  let reads = 0;
+  upstream = path => path.includes('/token?') ? { access_token: 'refreshed', refresh_token: 'new-refresh' } : { id: ++reads === 1 ? studentId : otherId, email_confirmed_at: '2026-10-21' };
+  const mismatch = await handler(event({ action: 'email-session', accessToken: 'confirmed', refreshToken: 'refresh', type: 'recovery' }));
+  assert.equal(mismatch.statusCode, 403); assert.ok(!mismatch.multiValueHeaders);
+});
+test('recovery mode blocks activity until a new password is saved', async () => {
+  const res = await handler(event({ action: 'questions' }, { cookie: 'atqin_access=token; atqin_recovery=1' }));
+  assert.equal(res.statusCode, 403);
+});
+test('email callbacks parse confirmation/recovery and never reflect untrusted errors', () => {
+  assert.equal(parseEmailCallback('', '').kind, 'none');
+  assert.equal(parseEmailCallback('', '?auth=callback').kind, 'error');
+  assert.deepEqual(parseEmailCallback('#access_token=a&refresh_token=r&type=recovery'), { kind: 'session', accessToken: 'a', refreshToken: 'r', type: 'recovery' });
+  assert.equal(parseEmailCallback('#access_token=a&type=signup').kind, 'error');
+  assert.equal(parseEmailCallback('#access_token=a&refresh_token=r&type=admin').kind, 'error');
+  assert.ok(!parseEmailCallback('#error=bad&error_description=untrusted-text').message.includes('untrusted-text'));
 });

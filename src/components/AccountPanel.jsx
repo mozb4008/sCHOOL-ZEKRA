@@ -8,9 +8,33 @@ export function LoginPanel() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [mode, setMode] = useState('login');
+  const [name, setName] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [message, setMessage] = useState('');
+  const [resendAt, setResendAt] = useState(0);
+  const changeMode = mode => { setMode(mode); setError(''); setMessage(''); setPassword(''); setConfirm(''); };
   const submit = async e => {
     e.preventDefault(); setBusy(true); setError('');
-    try { await login(username, password); } catch (e) { setError(e.message); } finally { setBusy(false); }
+    setMessage('');
+    try {
+      if (mode === 'login') await login(username, password);
+      else if (mode === 'signup') {
+        if (password !== confirm) throw new Error('كلمتا المرور غير متطابقتين.');
+        await api('signup', { name, email: username, password });
+        setMode('confirm'); setPassword(''); setConfirm(''); setResendAt(Date.now() + 60000);
+        setMessage('راجعي بريدكِ وافتحي رابط تأكيد الحساب، ثم ستدخلين إلى المنصة. تحققي أيضًا من البريد غير الهام. إذا كان البريد مسجّلًا سابقًا يمكنكِ تسجيل الدخول أو استعادة كلمة المرور.');
+      } else {
+        await api('recover-password', { email: username });
+        setMessage('إذا كان البريد مرتبطًا بحساب، ستصلكِ رسالة برابط تعيين كلمة مرور جديدة. راجعي أيضًا البريد غير الهام.');
+      }
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const resend = async () => {
+    if (Date.now() < resendAt) { setError('انتظري دقيقة بين رسائل التأكيد.'); return; }
+    setBusy(true); setError('');
+    try { await api('resend-confirmation', { email: username }); setResendAt(Date.now() + 60000); setMessage('تم طلب رسالة تأكيد جديدة. راجعي بريدكِ والبريد غير الهام.'); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   const backupLegacy = () => {
     const data = {};
@@ -21,21 +45,29 @@ export function LoginPanel() {
   };
   return <section className="max-w-lg mx-auto my-10 px-4 space-y-5">
     <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-5">
-      <div><p className="text-moe-green font-bold text-sm">أهلًا بكِ في أتقن مهارتي</p><h1 className="text-2xl font-black text-moe-navy mt-2">دخول الطالبات والمعلمة</h1><p className="text-sm text-slate-600 mt-3 leading-7">ادخلي بالرمز وكلمة المرور اللذين زودتكِ بهما المعلمة، لتُحفظ نتائجكِ ويظهر لكِ مستواكِ من أي جهاز.</p></div>
+      <div><p className="text-moe-green font-bold text-sm">أهلًا بكِ في أتقن مهارتي</p><h1 className="text-2xl font-black text-moe-navy mt-2">{mode === 'login' ? 'دخول الطالبات والمعلمة' : mode === 'signup' ? 'إنشاء حساب طالبة' : mode === 'confirm' ? 'أكّدي بريدكِ الإلكتروني' : 'استعادة كلمة المرور'}</h1><p className="text-sm text-slate-600 mt-3 leading-7">{mode === 'login' ? 'ادخلي ببريدكِ وكلمة المرور لتتابعي مستواكِ من أي جهاز. الحسابات السابقة يمكنها الدخول برمز الطالبة أيضًا.' : mode === 'signup' ? 'سجّلي باسمكِ وبريدكِ الخاص، ثم أكّدي البريد. يُضاف حسابكِ إلى المنصة تلقائيًا.' : mode === 'recover' ? 'أدخلي بريد الحساب لنرسل لكِ رابط اختيار كلمة مرور جديدة.' : 'افتحي رابط التأكيد في بريدكِ لإكمال التسجيل.'}</p></div>
       {loading ? <Notice>جارٍ الاتصال بالمنصة…</Notice> : connectionError ? <Notice error>{connectionError} <button className="underline" onClick={retry}>إعادة المحاولة</button></Notice> : !configured ? <Notice>المنصة بانتظار تفعيل قاعدة البيانات. يمكنكِ تصفح الشرح، وسيُتاح الدخول بعد إكمال الإعداد.{missing.length > 0 && <details className="mt-3"><summary className="cursor-pointer font-bold">تفاصيل الإعداد لمسؤول المنصة</summary><p>المتغيرات التالية مفقودة أو فارغة في خدمة الموقع المنشورة. أضفها في مشروع Netlify نفسه ثم أعد النشر:</p><ul className="list-disc pr-5">{missing.map(name => <li key={name}><code dir="ltr">{name}</code></li>)}</ul></details>}<button className="block underline mt-2" onClick={retry}>إعادة التحقق</button></Notice> : null}
-      <form onSubmit={submit} className="space-y-4">
-        <label className="block text-sm font-bold">اسم المستخدم أو بريد المعلمة<input autoComplete="username" dir="ltr" className={`${fieldClass} mt-2`} value={username} onChange={e => setUsername(e.target.value)} required maxLength={160} placeholder="s001" /></label>
-        <label className="block text-sm font-bold">كلمة المرور<input type="password" autoComplete="current-password" dir="ltr" className={`${fieldClass} mt-2`} value={password} onChange={e => setPassword(e.target.value)} required maxLength={128} /></label>
-        {error && <Notice error>{error}</Notice>}
-        <button className={`${buttonClass} w-full`} disabled={busy || loading || !configured}>{busy ? 'جارٍ الدخول…' : 'تسجيل الدخول'}</button>
-      </form>
-      <p className="text-xs leading-6 text-slate-500">نسيتِ كلمة المرور؟ اطلبي من المعلمة إصدار كلمة مرور مؤقتة جديدة. الحسابات تُنشأ بواسطة المعلمة.</p>
+      {message && <Notice>{message}</Notice>}
+      {error && <Notice error>{error}</Notice>}
+      {mode !== 'confirm' && <form onSubmit={submit} className="space-y-4">
+        {mode === 'signup' && <label className="block text-sm font-bold">اسم الطالبة<input autoComplete="name" className={`${fieldClass} mt-2`} value={name} onChange={e => setName(e.target.value)} required minLength={2} maxLength={120} /></label>}
+        <label className="block text-sm font-bold">{mode === 'login' ? 'البريد الإلكتروني أو رمز الطالبة' : 'البريد الإلكتروني'}<input type={mode === 'login' ? 'text' : 'email'} autoComplete="username" dir="ltr" className={`${fieldClass} mt-2`} value={username} onChange={e => setUsername(e.target.value)} required maxLength={254} placeholder={mode === 'login' ? 'name@example.com أو s001' : 'name@example.com'} /></label>
+        {mode !== 'recover' && <label className="block text-sm font-bold">كلمة المرور<input type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} dir="ltr" className={`${fieldClass} mt-2`} value={password} onChange={e => setPassword(e.target.value)} required minLength={mode === 'signup' ? 10 : undefined} maxLength={128} /></label>}
+        {mode === 'signup' && <label className="block text-sm font-bold">تأكيد كلمة المرور<input type="password" autoComplete="new-password" dir="ltr" className={`${fieldClass} mt-2`} value={confirm} onChange={e => setConfirm(e.target.value)} required minLength={10} maxLength={128} /></label>}
+        <button className={`${buttonClass} w-full`} disabled={busy || loading || !configured}>{busy ? 'جارٍ الإرسال…' : mode === 'login' ? 'تسجيل الدخول' : mode === 'signup' ? 'إنشاء الحساب وإرسال التأكيد' : 'إرسال رابط الاستعادة'}</button>
+      </form>}
+      <div className="flex flex-wrap gap-4 text-sm text-moe-navy font-bold">
+        {mode !== 'login' && <button disabled={busy} className="underline" onClick={() => changeMode('login')}>العودة لتسجيل الدخول</button>}
+        {mode === 'login' && <><button disabled={busy} className="underline" onClick={() => changeMode('signup')}>طالبة جديدة؟ أنشئي حسابكِ</button><button disabled={busy} className="underline" onClick={() => changeMode('recover')}>نسيتِ كلمة المرور؟</button></>}
+        {mode === 'confirm' && <button disabled={busy} className="underline" onClick={resend}>إعادة إرسال رابط التأكيد</button>}
+      </div>
+      <p className="text-xs leading-6 text-slate-500">لا تحتاجين إلى موافقة المعلمة لإنشاء حساب طالبة. الحسابات القديمة التي تستخدم رمزًا فقط يمكن للمعلمة إعادة كلمة مرورها.</p>
     </div>
     <details className="text-xs text-slate-500 leading-7"><summary className="cursor-pointer">لديكِ بيانات من النسخة السابقة؟</summary><p>البيانات القديمة تخص هذا المتصفح ولا تحدد هوية الطالبة. احتفظي بنسخة لمراجعتها مع المعلمة قبل الانتقال. لا تُدمج تلقائيًا مع النتائج الجديدة.</p><button onClick={backupLegacy} className="underline font-bold">تنزيل نسخة من البيانات المحلية القديمة</button></details>
   </section>;
 }
 
-export function PasswordPanel({ required = false, onDone }) {
+export function PasswordPanel({ required = false, recovery = false, onDone }) {
   const { refresh } = usePlatform();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -50,8 +82,8 @@ export function PasswordPanel({ required = false, onDone }) {
     catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   return <form onSubmit={submit} className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4 max-w-lg mx-auto my-6">
-    <h2 className="font-black text-lg text-moe-navy">{required ? 'اختاري كلمة مرور خاصة بكِ' : 'تغيير كلمة المرور'}</h2>
-    <p className="text-sm text-slate-600 leading-7">{required ? 'هذه أول زيارة أو أعادت المعلمة تهيئة حسابكِ. غيّري كلمة المرور المؤقتة قبل المتابعة.' : 'استخدمي كلمة مرور طويلة يصعب تخمينها ولا تشاركيها مع الآخرين.'}</p>
+    <h2 className="font-black text-lg text-moe-navy">{recovery ? 'تعيين كلمة مرور جديدة' : required ? 'اختاري كلمة مرور خاصة بكِ' : 'تغيير كلمة المرور'}</h2>
+    <p className="text-sm text-slate-600 leading-7">{recovery ? 'تم التحقق من رابط بريدكِ. اختاري كلمة مرور جديدة لحسابكِ.' : required ? 'هذه أول زيارة أو أعادت المعلمة تهيئة حسابكِ. غيّري كلمة المرور المؤقتة قبل المتابعة.' : 'استخدمي كلمة مرور طويلة يصعب تخمينها ولا تشاركيها مع الآخرين.'}</p>
     <label className="block text-sm">كلمة المرور الجديدة<input type="password" dir="ltr" autoComplete="new-password" required minLength={10} maxLength={128} value={password} onChange={e => setPassword(e.target.value)} className={`${fieldClass} mt-2`} /></label>
     <label className="block text-sm">تأكيد كلمة المرور<input type="password" dir="ltr" autoComplete="new-password" required minLength={10} maxLength={128} value={confirm} onChange={e => setConfirm(e.target.value)} className={`${fieldClass} mt-2`} /></label>
     {error && <Notice error>{error}</Notice>}{success && <Notice>تم تغيير كلمة المرور.</Notice>}

@@ -20,11 +20,25 @@ const teacherId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const users = [{ id: teacherId, email: 'teacher@example.test', password: 'Teacher-test-123' }];
 const db = { profiles: [{ id: teacherId, code: 'teacher-001', name: 'معلمة الاختبار', role: 'teacher', must_change_password: false, created_at: new Date().toISOString() }], assessment_attempts: [], challenge_attempts: [] };
 const sessions = new Map();
+const emails = [];
+const emailLink = (account, type) => {
+  account.email_confirmed_at ||= new Date().toISOString();
+  const token = crypto.randomUUID(), refresh = crypto.randomUUID();
+  sessions.set(token, account); sessions.set(refresh, account);
+  return `http://127.0.0.1:5175/?auth=callback#access_token=${token}&refresh_token=${refresh}&type=${type}`;
+};
 const response = (data, status = 200) => new Response(JSON.stringify(data), { status });
 globalThis.fetch = async (url, options = {}) => {
   if (!String(url).startsWith(process.env.SUPABASE_URL)) return originalFetch(url, options);
   const parsed = new URL(url), path = parsed.pathname, body = options.body ? JSON.parse(options.body) : {};
   const user = sessions.get(options.headers?.Authorization?.replace('Bearer ', ''));
+  if (path === '/auth/v1/settings') return response({ mailer_autoconfirm: false });
+  if (path === '/auth/v1/signup') {
+    const account = { id: crypto.randomUUID(), email: body.email, password: body.password, user_metadata: body.data };
+    users.push(account); emails.push({ type: 'signup', account }); return response({ id: account.id });
+  }
+  if (path === '/auth/v1/recover') { emails.push({ type: 'recovery', account: users.find(u => u.email === body.email) }); return response({}); }
+  if (path === '/auth/v1/resend') return response({});
   if (path === '/auth/v1/token') {
     const account = body.refresh_token ? sessions.get(body.refresh_token) : users.find(u => u.email === body.email && u.password === body.password);
     if (!account) return response({ error: 'invalid credentials' }, 400);
@@ -35,7 +49,7 @@ globalThis.fetch = async (url, options = {}) => {
   if (path === '/auth/v1/user') {
     if (!user) return response({}, 401);
     if (options.method === 'PUT') user.password = body.password;
-    return response({ id: user.id, email: user.email });
+    return response({ id: user.id, email: user.email, email_confirmed_at: user.email_confirmed_at, user_metadata: user.user_metadata });
   }
   if (path === '/auth/v1/admin/users') {
     const account = { id: crypto.randomUUID(), ...body }; users.push(account); return response({ id: account.id });
@@ -71,7 +85,7 @@ try {
   const navigate = async label => page.locator('nav').getByRole('button', { name: label, exact: true }).click();
   const logout = async () => { await page.getByRole('button', { name: 'تسجيل الخروج', exact: true }).click(); await page.locator('header').getByRole('button', { name: 'بوابة المعلمة', exact: true }).click(); await page.getByRole('heading', { name: 'دخول الطالبات والمعلمة' }).waitFor(); };
   const login = async (username, password) => {
-    await page.getByLabel('اسم المستخدم أو بريد المعلمة').fill(username);
+    await page.getByLabel('البريد الإلكتروني أو رمز الطالبة').fill(username);
     await page.getByLabel('كلمة المرور', { exact: true }).fill(password);
     await page.locator('main').getByRole('button', { name: 'تسجيل الدخول', exact: true }).click();
   };
@@ -145,8 +159,39 @@ try {
   await page.emulateMedia({ media: 'print' });
   assert.ok(await page.locator('.report-document header').isVisible());
   await page.pdf({ path: 'test-results/report.pdf', format: 'A4', printBackground: true });
+  await page.emulateMedia({ media: 'screen' });
+  await logout();
+  await page.getByRole('button', { name: 'طالبة جديدة؟ أنشئي حسابكِ', exact: true }).click();
+  await page.getByLabel('اسم الطالبة', { exact: true }).fill('طالبة البريد');
+  await page.getByLabel('البريد الإلكتروني', { exact: true }).fill('student@example.test');
+  await page.getByLabel('كلمة المرور', { exact: true }).fill('Email-password-123');
+  await page.getByLabel('تأكيد كلمة المرور', { exact: true }).fill('Email-password-123');
+  await page.screenshot({ path: 'test-results/signup.png', fullPage: true });
+  await page.getByRole('button', { name: 'إنشاء الحساب وإرسال التأكيد', exact: true }).click();
+  await page.getByRole('heading', { name: 'أكّدي بريدكِ الإلكتروني' }).waitFor();
+  assert.equal(emails.length, 1);
+  assert.ok(!db.profiles.some(p => p.id === emails[0].account.id), 'profile must wait for verified email');
+  await page.goto(emailLink(emails[0].account, 'signup'));
+  await page.getByRole('heading', { name: 'أهلًا طالبة البريد' }).waitFor();
+  assert.ok(!page.url().includes('access_token'));
+  const selfProfile = db.profiles.find(p => p.id === emails[0].account.id);
+  assert.equal(selfProfile.role, 'student');
+  await logout();
+  await page.getByRole('button', { name: 'نسيتِ كلمة المرور؟', exact: true }).click();
+  await page.getByLabel('البريد الإلكتروني', { exact: true }).fill('student@example.test');
+  await page.getByRole('button', { name: 'إرسال رابط الاستعادة', exact: true }).click();
+  await page.getByText('إذا كان البريد مرتبطًا بحساب،', { exact: false }).waitFor();
+  assert.equal(emails[1].type, 'recovery');
+  await page.goto(emailLink(emails[1].account, 'recovery'));
+  await page.getByRole('heading', { name: 'تعيين كلمة مرور جديدة', exact: true }).waitFor();
+  await page.getByLabel('كلمة المرور الجديدة', { exact: true }).fill('Recovered-password-123');
+  await page.getByLabel('تأكيد كلمة المرور', { exact: true }).fill('Recovered-password-123');
+  await page.getByRole('button', { name: 'حفظ كلمة المرور', exact: true }).click();
+  await page.getByRole('heading', { name: 'أهلًا طالبة البريد' }).waitFor();
+  await logout(); await login('student@example.test', 'Recovered-password-123');
+  await page.getByRole('heading', { name: 'أهلًا طالبة البريد' }).waitFor();
   assert.deepEqual(errors, []);
-  console.log('PASS: teacher account creation; first-login password; student baseline/challenge/post-test; persistence; second-student isolation; protected report; desktop/mobile/print.');
+  console.log('PASS: teacher and student flows; assessment persistence/isolation; desktop/mobile/print; email signup, confirmation, profile creation, password recovery, and login with the new password.');
 } finally {
   globalThis.fetch = originalFetch;
   await browser?.close(); await server?.close();
