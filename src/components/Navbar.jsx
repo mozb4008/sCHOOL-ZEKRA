@@ -9,7 +9,6 @@ export default function Navbar({ activeTab, setActiveTab, role, progressSummary 
 
   const navItems = [
     { id: 'home', label: 'الرئيسية', icon: Compass },
-    { id: role ? (role === 'teacher' ? 'teacher' : 'progress') : 'login', label: role ? (role === 'teacher' ? 'لوحة المعلمة' : 'مستواي') : 'تسجيل الدخول', icon: Shield },
     { id: 'ions', label: 'تدريب الأيونات', icon: Zap, badge: 'جديد' },
     { id: 'challenge', label: 'خطأ نودّعه', icon: CheckCircle2, highlight: true },
     { id: 'learn', label: 'تعلّم التوزيع', icon: BookOpen },
@@ -118,17 +117,17 @@ export default function Navbar({ activeTab, setActiveTab, role, progressSummary 
             {/* Teacher Dashboard Switch */}
             <button
               onClick={() => {
-                setActiveTab(role === 'student' ? 'progress' : 'teacher');
+                handleNavClick(role === 'teacher' ? 'teacher' : role === 'student' ? 'progress' : 'login');
               }}
               className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
-                activeTab === 'teacher'
+                activeTab === (role === 'teacher' ? 'teacher' : role === 'student' ? 'progress' : 'login')
                   ? 'bg-moe-navy text-white shadow-sm'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
               }`}
-              title="بوابة المعلمة المحمية"
+              title={role === 'teacher' ? 'لوحة المعلمة' : role === 'student' ? 'مستواي' : 'تسجيل الدخول'}
             >
               <Shield className="w-3.5 h-3.5 text-moe-teal" />
-              <span>{role === 'student' ? 'مستواي' : 'بوابة المعلمة'}</span>
+              <span>{role === 'teacher' ? 'لوحة المعلمة' : role === 'student' ? 'مستواي' : 'تسجيل الدخول'}</span>
             </button>
 
             {/* Mobile menu trigger */}
