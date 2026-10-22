@@ -4,15 +4,15 @@ import { useTeacherData } from '../lib/useTeacherData';
 import { buildReport, formatPercent, studentStatus, studentsCsv } from '../lib/report';
 import { PasswordPanel } from './AccountPanel';
 
-function exportCsv(students, anonymous) {
-  const url = URL.createObjectURL(new Blob([studentsCsv(students, anonymous)], { type: 'text/csv;charset=utf-8' }));
+function exportCsv(students) {
+  const url = URL.createObjectURL(new Blob([studentsCsv(students, false)], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a'); a.href = url; a.download = 'atqin-students.csv'; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export default function TeacherDashboard({ onGoToReport }) {
   const { data, error, loading, reload } = useTeacherData();
   const [search, setSearch] = useState('');
-  const [anonymous, setAnonymous] = useState(true);
+
   const [showAdd, setShowAdd] = useState(false);
   const [resetStudent, setResetStudent] = useState(null);
   const [message, setMessage] = useState('');
@@ -46,8 +46,8 @@ export default function TeacherDashboard({ onGoToReport }) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">{[['الطالبات المسجلات', report.students.length], ['متوسط القبلي', formatPercent(report.preAverage)], ['متوسط البعدي', formatPercent(report.postAverage)], ['إتقان من أكملن البعدي', formatPercent(report.masteryRate)]].map(([label, value]) => <div key={label} className="bg-white rounded-2xl p-5 border border-slate-200"><p className="text-sm text-slate-500">{label}</p><p className="text-3xl text-moe-navy font-black mt-3">{value}</p></div>)}</div>
       <p className="text-xs text-slate-500">أكملن القبلي: {report.preCount} — أكملن البعدي: {report.postCount}. معيار الإتقان: 85%. التحديث عند الضغط على «تحديث النتائج».</p>
       <div className="bg-white rounded-2xl border p-5 space-y-4">
-        <div className="flex flex-wrap gap-3 justify-between items-center"><h2 className="text-lg font-black text-moe-navy">سجل الطالبات</h2><div className="flex flex-wrap gap-2"><button className={buttonClass} onClick={() => { setShowAdd(!showAdd); setActionError(''); setCredentials(null); }}>إضافة طالبة</button><button className={buttonClass} onClick={() => exportCsv(report.students, anonymous)}>تصدير CSV</button><button className={buttonClass} onClick={() => downloadJson('atqin-backup.json', { exportedAt: new Date().toISOString(), ...data })}>نسخة بيانات JSON</button></div></div>
-        <div className="flex flex-wrap items-center gap-4"><label className="flex-1 text-sm">البحث عن طالبة<input className={`${fieldClass} mt-2`} value={search} onChange={e => setSearch(e.target.value)} placeholder="الاسم أو الرمز" /></label><label className="text-sm flex gap-2 items-center"><input type="checkbox" checked={anonymous} onChange={e => setAnonymous(e.target.checked)} />إخفاء الأسماء</label></div>
+        <div className="flex flex-wrap gap-3 justify-between items-center"><h2 className="text-lg font-black text-moe-navy">سجل الطالبات</h2><div className="flex flex-wrap gap-2"><button className={buttonClass} onClick={() => { setShowAdd(!showAdd); setActionError(''); setCredentials(null); }}>إضافة طالبة</button><button className={buttonClass} onClick={() => exportCsv(report.students)}>تصدير CSV</button><button className={buttonClass} onClick={() => downloadJson('atqin-backup.json', { exportedAt: new Date().toISOString(), ...data })}>نسخة بيانات JSON</button></div></div>
+        <div className="flex flex-wrap items-center gap-4"><label className="flex-1 text-sm">البحث عن طالبة<input className={`${fieldClass} mt-2`} value={search} onChange={e => setSearch(e.target.value)} placeholder="الاسم أو الرمز" /></label></div>
         {message && <Notice>{message}</Notice>}
         {credentials && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-2 text-sm"><p>بيانات دخول الحساب — تظهر هنا حتى تغلقيها:</p><p>الرمز: <b dir="ltr">{credentials.code}</b></p><p>كلمة المرور المؤقتة: <b dir="ltr">{credentials.password}</b></p><button className="underline" onClick={() => setCredentials(null)}>إخفاء بيانات الدخول</button></div>}
         {actionError && <Notice error>{actionError}</Notice>}
@@ -58,8 +58,8 @@ export default function TeacherDashboard({ onGoToReport }) {
           <div className="flex gap-2 items-end"><button className={buttonClass} disabled={busy}>{busy ? 'جارٍ الإنشاء…' : 'إنشاء الحساب'}</button><button type="button" className="p-3 text-sm" onClick={() => setShowAdd(false)}>إلغاء</button></div>
           <p className="text-xs text-slate-500 sm:col-span-2">لا تحتاج الطالبة إلى بريد إلكتروني. احتفظي برمزها وسلّمي كلمة المرور لها بشكل خاص.</p>
         </form>}
-        {resetStudent && <form onSubmit={resetPassword} className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3"><h3 className="font-bold">كلمة مرور مؤقتة جديدة للطالبة {anonymous ? resetStudent.code : resetStudent.name}</h3><label className="block text-sm">كلمة المرور المؤقتة<input name="password" type="password" autoComplete="new-password" dir="ltr" minLength={10} maxLength={128} required className={`${fieldClass} mt-2`} /></label><div className="flex gap-3"><button className={buttonClass} disabled={busy}>حفظ</button><button type="button" onClick={() => setResetStudent(null)}>إلغاء</button></div></form>}
-        <div className="overflow-x-auto"><table className="w-full text-sm text-right"><caption className="sr-only">درجات الطالبات وتقدمهن</caption><thead><tr className="border-b bg-slate-50">{['الرمز', 'الطالبة', 'القبلي', 'آخر بعدي', 'التحديات', 'الحالة', 'الحساب'].map(t => <th key={t} scope="col" className="p-3 whitespace-nowrap">{t}</th>)}</tr></thead><tbody>{students.map(s => <tr key={s.id} className="border-b"><td className="p-3" dir="ltr">{s.code}</td><td className="p-3 whitespace-nowrap">{anonymous ? `طالبة ${s.code}` : s.name}</td><td className="p-3">{formatPercent(s.history.pre?.score)}</td><td className="p-3">{formatPercent(s.history.post?.score)}</td><td className="p-3">{s.completedChallenges}</td><td className="p-3 whitespace-nowrap">{studentStatus(s.history)}</td><td className="p-3"><button className="underline text-moe-navy whitespace-nowrap" onClick={() => { setResetStudent(s); setCredentials(null); setActionError(''); }}>إعادة كلمة المرور</button></td></tr>)}</tbody></table></div>
+        {resetStudent && <form onSubmit={resetPassword} className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3"><h3 className="font-bold">كلمة مرور مؤقتة جديدة للطالبة {resetStudent.name}</h3><label className="block text-sm">كلمة المرور المؤقتة<input name="password" type="password" autoComplete="new-password" dir="ltr" minLength={10} maxLength={128} required className={`${fieldClass} mt-2`} /></label><div className="flex gap-3"><button className={buttonClass} disabled={busy}>حفظ</button><button type="button" onClick={() => setResetStudent(null)}>إلغاء</button></div></form>}
+        <div className="overflow-x-auto"><table className="w-full text-sm text-right"><caption className="sr-only">درجات الطالبات وتقدمهن</caption><thead><tr className="border-b bg-slate-50">{['الرمز', 'الطالبة', 'القبلي', 'آخر بعدي', 'التحديات', 'الحالة', 'الحساب'].map(t => <th key={t} scope="col" className="p-3 whitespace-nowrap">{t}</th>)}</tr></thead><tbody>{students.map(s => <tr key={s.id} className="border-b"><td className="p-3" dir="ltr">{s.code}</td><td className="p-3 whitespace-nowrap">{s.name}</td><td className="p-3">{formatPercent(s.history.pre?.score)}</td><td className="p-3">{formatPercent(s.history.post?.score)}</td><td className="p-3">{s.completedChallenges}</td><td className="p-3 whitespace-nowrap">{studentStatus(s.history)}</td><td className="p-3"><button className="underline text-moe-navy whitespace-nowrap" onClick={() => { setResetStudent(s); setCredentials(null); setActionError(''); }}>إعادة كلمة المرور</button></td></tr>)}</tbody></table></div>
         {!students.length && <p className="text-center text-sm text-slate-500 p-6">{report.students.length ? 'لا توجد نتائج مطابقة للبحث.' : 'لم تُضف طالبات بعد. ابدئي بإنشاء الحسابات.'}</p>}
       </div>
     </>}
