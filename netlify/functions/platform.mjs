@@ -54,8 +54,8 @@ export async function handler(event) {
         if (code === 'email_address_not_authorized' || /email address.*not authorized|only.*team.*email/i.test(result?.msg || result?.message || '')) throw new ApiError(503, 'إرسال البريد للطالبات يحتاج إعداد Custom SMTP في Supabase. الإرسال الافتراضي مخصص لعناوين فريق المشروع.');
         if (['unexpected_failure', 'email_send_failed'].includes(code) && /email|smtp/i.test(result?.msg || result?.message || '')) throw new ApiError(503, 'تعذّر إرسال البريد. راجعي إعدادات Custom SMTP في Supabase.');
         if (code === 'same_password') throw new ApiError(400, 'اختاري كلمة مرور تختلف عن كلمة المرور السابقة.');
-        if (code === 'email_not_confirmed') throw new ApiError(400, 'بريد الحساب غير مؤكد. أكّدي الحساب من Authentication ثم Users داخل Supabase.');
-        if (code === 'invalid_credentials') throw new ApiError(401, 'البريد أو كلمة المرور غير صحيحة. استخدمي حساب المعلمة المنشأ في Authentication ثم Users، وليس كلمة مرور لوحة Supabase.');
+        if (code === 'email_not_confirmed') throw new ApiError(400, 'بريدكِ الإلكتروني غير مؤكد. افتحي رابط التأكيد المرسل إلى بريدكِ، ثم حاولي تسجيل الدخول مجددًا.');
+        if (code === 'invalid_credentials') throw new ApiError(401, 'البريد الإلكتروني أو كلمة المرور غير صحيحة. تحققي من بياناتكِ وحاولي مرة أخرى.');
         const invalidKey = /invalid.?api.?key|no api.?key|invalid.?jwt|invalid authentication credentials/i.test(result?.message || result?.msg || '');
         if ((admin && [401, 403].includes(res.status)) ||
             (invalidKey && (admin || path.includes('/token') || /api.?key/i.test(result?.message || result?.msg || '')))) {

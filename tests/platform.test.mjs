@@ -108,7 +108,8 @@ test('invalid API configuration is distinguished from an incorrect password', as
 });
 test('confirmation errors and invalid server credentials have distinct messages', async () => {
   upstream = () => new Response(JSON.stringify({ error_code: 'email_not_confirmed' }), { status: 400 });
-  assert.match(parse(await handler(event({ action: 'login', username: 's001', password: 'password' }))).error, /غير مؤكد/);
+  const confirmation = parse(await handler(event({ action: 'login', username: 's001', password: 'password' }))).error;
+  assert.match(confirmation, /غير مؤكد/); assert.match(confirmation, /رابط التأكيد/); assert.doesNotMatch(confirmation, /Supabase|Authentication|Users/);
   upstream = path => path === '/auth/v1/user' ? { id: studentId } : new Response('{}', { status: 401 });
   const res = await handler(event({ action: 'me' }));
   assert.equal(res.statusCode, 503); assert.match(parse(res).error, /SUPABASE_SERVICE_ROLE_KEY/);
