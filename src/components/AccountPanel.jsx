@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { usePlatform, api, Notice, fieldClass, buttonClass, downloadJson } from '../lib/platform';
+import { usePlatform, api, Notice, fieldClass, buttonClass } from '../lib/platform';
 import { errorChallengeBank } from '../data/errorChallengeData';
 
 export function LoginPanel() {
@@ -36,13 +36,6 @@ export function LoginPanel() {
     try { await api('resend-confirmation', { email: username }); setResendAt(Date.now() + 60000); setMessage('تم طلب رسالة تأكيد جديدة. راجعي بريدكِ والبريد غير الهام.'); }
     catch (e) { setError(e.message); } finally { setBusy(false); }
   };
-  const backupLegacy = () => {
-    const data = {};
-    for (const key of ['atqin_students_list', 'atqin_assessment_results', 'atqin_completed_challenges']) {
-      try { const value = localStorage.getItem(key); if (value) data[key] = JSON.parse(value); } catch { /* preserve other readable entries */ }
-    }
-    downloadJson('atqin-legacy-backup.json', { exportedAt: new Date().toISOString(), source: 'legacy-browser', data });
-  };
   return <section className="max-w-lg mx-auto my-10 px-4 space-y-5">
     <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-5">
       <div><p className="text-moe-green font-bold text-sm">أهلًا بكِ في أتقن مهارتي</p><h1 className="text-2xl font-black text-moe-navy mt-2">{mode === 'login' ? 'دخول الطالبات والمعلمة' : mode === 'signup' ? 'إنشاء حساب طالبة' : mode === 'confirm' ? 'أكّدي بريدكِ الإلكتروني' : 'استعادة كلمة المرور'}</h1><p className="text-sm text-slate-600 mt-3 leading-7">{mode === 'login' ? 'ادخلي ببريدكِ وكلمة المرور لتتابعي مستواكِ من أي جهاز. الحسابات السابقة يمكنها الدخول برمز الطالبة أيضًا.' : mode === 'signup' ? 'سجّلي باسمكِ وبريدكِ الخاص، ثم أكّدي البريد. يُضاف حسابكِ إلى المنصة تلقائيًا.' : mode === 'recover' ? 'أدخلي بريد الحساب لنرسل لكِ رابط اختيار كلمة مرور جديدة.' : 'افتحي رابط التأكيد في بريدكِ لإكمال التسجيل.'}</p></div>
@@ -63,7 +56,6 @@ export function LoginPanel() {
       </div>
       <p className="text-xs leading-6 text-slate-500">لا تحتاجين إلى موافقة المعلمة لإنشاء حساب طالبة. الحسابات القديمة التي تستخدم رمزًا فقط يمكن للمعلمة إعادة كلمة مرورها.</p>
     </div>
-    <details className="text-xs text-slate-500 leading-7"><summary className="cursor-pointer">لديكِ بيانات من النسخة السابقة؟</summary><p>البيانات القديمة تخص هذا المتصفح ولا تحدد هوية الطالبة. احتفظي بنسخة لمراجعتها مع المعلمة قبل الانتقال. لا تُدمج تلقائيًا مع النتائج الجديدة.</p><button onClick={backupLegacy} className="underline font-bold">تنزيل نسخة من البيانات المحلية القديمة</button></details>
   </section>;
 }
 
