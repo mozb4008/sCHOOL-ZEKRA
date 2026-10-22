@@ -6,6 +6,9 @@ class ApiError extends Error {
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const codePattern = /^[a-z][a-z0-9_-]{2,39}$/;
 const loginEmail = code => `${code}@students.atqin.invalid`;
+// Primary ownership is fixed server-side and cannot be delegated through the UI.
+const ownerEmail = 'futureoflife025@gmail.com';
+const ownsPlatform = user => user.email_confirmed_at && user.email?.toLowerCase() === ownerEmail;
 const reply = (statusCode, data, cookies = []) => ({ statusCode,
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
   ...(cookies.length ? { multiValueHeaders: { 'Set-Cookie': cookies } } : {}), body: JSON.stringify(data) });
@@ -143,12 +146,14 @@ export async function handler(event) {
       [profile] = await request(`/rest/v1/profiles?id=eq.${user.id}&select=*`);
     }
     if (!profile) throw new ApiError(403, 'الحساب غير مفعّل. تواصلي مع المعلمة.');
+    const isOwner = profile.role === 'teacher' && !!ownsPlatform(user);
+    const canManageTeachers = profile.role === 'teacher' && (isOwner || user.app_metadata?.manage_teachers === true);
     const ownData = async () => {
       const [attempts, challenges] = await Promise.all([
         allRows('assessment_attempts', `student_id=eq.${user.id}`),
         allRows('challenge_attempts', `student_id=eq.${user.id}`)
       ]);
-      return { profile, recoveryRequired: cookies.atqin_recovery === '1', attempts, history: assessmentHistory(attempts), completedIds: [...new Set(challenges.filter(c => c.correct).map(c => c.challenge_id))] };
+      return { profile, permissions: { isOwner, canManageTeachers }, recoveryRequired: cookies.atqin_recovery === '1', attempts, history: assessmentHistory(attempts), completedIds: [...new Set(challenges.filter(c => c.correct).map(c => c.challenge_id))] };
     };
     if (action === 'me') return reply(200, await ownData());
     if (action === 'change-password') {
@@ -182,6 +187,41 @@ export async function handler(event) {
       return reply(200, await ownData());
     }
     if (profile.role !== 'teacher') throw new ApiError(403, 'هذه الصفحة متاحة للمعلمة فقط.');
+    if (action === 'manage-teacher' || action === 'list-teachers') {
+      if (!canManageTeachers) throw new ApiError(403, 'لا تملكين صلاحية إدارة المعلمات.');
+      const users = [];
+      for (let page = 1; ; page++) {
+        const result = await request(`/auth/v1/admin/users?page=${page}&per_page=100`);
+        const batch = result?.users || [];
+        users.push(...batch);
+        if (batch.length < 100) break;
+      }
+      if (action === 'list-teachers') {
+        const profiles = await allRows('profiles', 'role=eq.teacher');
+        return reply(200, { teachers: profiles.map(p => {
+          const auth = users.find(u => u.id === p.id);
+          return { id: p.id, name: p.name, email: auth?.email || '', isOwner: !!(auth && ownsPlatform(auth)), canManageTeachers: auth?.app_metadata?.manage_teachers === true };
+        }) });
+      }
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !['grant', 'revoke'].includes(body.operation) || typeof body.canManageTeachers !== 'boolean') throw new ApiError(400, 'تحققي من البريد والصلاحية المطلوبة.');
+      const target = users.find(u => u.email?.toLowerCase() === email);
+      if (!target || !target.email_confirmed_at) throw new ApiError(400, 'يجب أن تسجّل المعلمة بهذا البريد وتؤكده أولًا، ثم تسجّل الدخول مرة واحدة.');
+      if (target.id === user.id || target.email?.toLowerCase() === ownerEmail) throw new ApiError(403, 'لا يمكن تعديل صلاحية المسؤول الأساسي أو حسابكِ من هنا.');
+      if (!isOwner && (body.operation === 'revoke' || body.canManageTeachers || target.app_metadata?.manage_teachers === true)) throw new ApiError(403, 'هذه الصلاحية متاحة للمسؤول الأساسي فقط. يمكنكِ إضافة معلمات لمتابعة النتائج.');
+      const [targetProfile] = await request(`/rest/v1/profiles?id=eq.${target.id}&select=*`);
+      if (!targetProfile) throw new ApiError(400, 'اطلبي من المعلمة تسجيل الدخول مرة واحدة لإكمال حسابها.');
+      const grant = body.operation === 'grant';
+      // App metadata is server-controlled; public user metadata never grants authority.
+      await request(`/auth/v1/admin/users/${target.id}`, { method: 'PUT', data: { app_metadata: { ...target.app_metadata, manage_teachers: grant && isOwner && body.canManageTeachers } } });
+      try {
+        await request(`/rest/v1/profiles?id=eq.${target.id}`, { method: 'PATCH', data: { role: grant ? 'teacher' : 'student' } });
+      } catch (error) {
+        await request(`/auth/v1/admin/users/${target.id}`, { method: 'PUT', data: { app_metadata: { ...target.app_metadata, manage_teachers: target.app_metadata?.manage_teachers === true } } }).catch(() => {});
+        throw error;
+      }
+      return reply(200, { ok: true });
+    }
     if (action === 'dashboard') {
       const [profiles, attempts, challenges] = await Promise.all([allRows('profiles'), allRows('assessment_attempts'), allRows('challenge_attempts')]);
       return reply(200, { students: profiles.filter(p => p.role === 'student'), attempts, challenges });

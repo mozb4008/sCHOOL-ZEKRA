@@ -3,6 +3,7 @@ import { api, Notice, buttonClass, fieldClass, downloadJson } from '../lib/platf
 import { useTeacherData } from '../lib/useTeacherData';
 import { buildReport, formatPercent, studentStatus, studentsCsv } from '../lib/report';
 import { PasswordPanel } from './AccountPanel';
+import TeacherAccess from './TeacherAccess';
 
 function exportCsv(students) {
   const url = URL.createObjectURL(new Blob([studentsCsv(students, false)], { type: 'text/csv;charset=utf-8' }));
@@ -63,6 +64,7 @@ export default function TeacherDashboard({ onGoToReport }) {
         {!students.length && <p className="text-center text-sm text-slate-500 p-6">{report.students.length ? 'لا توجد نتائج مطابقة للبحث.' : 'لم تُضف طالبات بعد. ابدئي بإنشاء الحسابات.'}</p>}
       </div>
     </>}
+    <TeacherAccess />
     <PasswordPanel />
   </section>;
 }

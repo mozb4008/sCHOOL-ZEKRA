@@ -309,3 +309,62 @@ test('email callbacks parse confirmation/recovery and never reflect untrusted er
   assert.equal(parseEmailCallback('#access_token=a&refresh_token=r&type=admin').kind, 'error');
   assert.ok(!parseEmailCallback('#error=bad&error_description=untrusted-text').message.includes('untrusted-text'));
 });
+
+test('only confirmed primary teacher owns platform; user metadata cannot delegate', async () => {
+  upstream = path => {
+    if (path === '/auth/v1/user') return { id: studentId, email: 'futureoflife025@gmail.com', email_confirmed_at: '2026-10-22', user_metadata: { manage_teachers: true } };
+    if (path.startsWith('/rest/v1/profiles?')) return [{ ...profile, role: 'teacher' }];
+    return [];
+  };
+  assert.deepEqual(parse(await handler(event({ action: 'me' }))).permissions, { isOwner: true, canManageTeachers: true });
+  upstream = path => path === '/auth/v1/user' ? { id: studentId, email: 'other@example.com', user_metadata: { manage_teachers: true, platform_owner: true } } : [{ ...profile, role: 'teacher' }];
+  assert.equal((await handler(event({ action: 'list-teachers' }))).statusCode, 403);
+});
+
+function teacherAccessMock({ owner = true, manager = false, targetOwner = false, confirmed = true } = {}) {
+  const actor = { id: studentId, email: owner ? 'futureoflife025@gmail.com' : 'manager@example.com', email_confirmed_at: '2026-10-22', app_metadata: { manage_teachers: manager } };
+  const target = { id: otherId, email: targetOwner ? 'futureoflife025@gmail.com' : 'teacher@example.com', email_confirmed_at: confirmed ? '2026-10-22' : null, app_metadata: { provider: 'email' } };
+  upstream = (path, options) => {
+    if (path === '/auth/v1/user') return actor;
+    if (path.startsWith('/auth/v1/admin/users?')) return { users: [actor, target] };
+    if (path.startsWith('/auth/v1/admin/users/')) return target;
+    if (path.startsWith(`/rest/v1/profiles?id=eq.${studentId}`)) return [{ ...profile, role: 'teacher' }];
+    if (path.startsWith(`/rest/v1/profiles?id=eq.${otherId}`)) return options.method === 'PATCH' ? null : [{ ...profile, id: otherId }];
+    return [];
+  };
+}
+
+test('owner grants teacher and delegation preserving other app metadata', async () => {
+  teacherAccessMock();
+  const res = await handler(event({ action: 'manage-teacher', email: 'TEACHER@example.com', operation: 'grant', canManageTeachers: true }));
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(calls.find(c => c.path.endsWith(otherId) && c.method === 'PUT').data.app_metadata, { provider: 'email', manage_teachers: true });
+  assert.equal(calls.find(c => c.method === 'PATCH').data.role, 'teacher');
+});
+
+test('delegated teacher may add ordinary teachers but cannot delegate, revoke or alter owner', async () => {
+  teacherAccessMock({ owner: false, manager: true });
+  assert.equal((await handler(event({ action: 'manage-teacher', email: 'teacher@example.com', operation: 'grant', canManageTeachers: false }))).statusCode, 200);
+  for (const body of [{ operation: 'grant', canManageTeachers: true }, { operation: 'revoke', canManageTeachers: false }]) {
+    calls.length = 0;
+    assert.equal((await handler(event({ action: 'manage-teacher', email: 'teacher@example.com', ...body }))).statusCode, 403);
+    assert.ok(!calls.some(c => c.method === 'PUT' || c.method === 'PATCH'));
+  }
+  teacherAccessMock({ owner: false, manager: true, targetOwner: true });
+  assert.equal((await handler(event({ action: 'manage-teacher', email: 'futureoflife025@gmail.com', operation: 'grant', canManageTeachers: false }))).statusCode, 403);
+});
+
+test('teacher access requires confirmed existing account and protects owner self-change', async () => {
+  teacherAccessMock({ confirmed: false });
+  assert.equal((await handler(event({ action: 'manage-teacher', email: 'teacher@example.com', operation: 'grant', canManageTeachers: false }))).statusCode, 400);
+  teacherAccessMock();
+  assert.equal((await handler(event({ action: 'manage-teacher', email: 'unknown@example.com', operation: 'grant', canManageTeachers: false }))).statusCode, 400);
+  assert.equal((await handler(event({ action: 'manage-teacher', email: 'futureoflife025@gmail.com', operation: 'revoke', canManageTeachers: false }))).statusCode, 403);
+});
+
+test('owner revocation clears delegated authority and changes role to student', async () => {
+  teacherAccessMock();
+  assert.equal((await handler(event({ action: 'manage-teacher', email: 'teacher@example.com', operation: 'revoke', canManageTeachers: false }))).statusCode, 200);
+  assert.equal(calls.find(c => c.method === 'PUT').data.app_metadata.manage_teachers, false);
+  assert.equal(calls.find(c => c.method === 'PATCH').data.role, 'student');
+});
